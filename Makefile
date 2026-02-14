@@ -10,7 +10,7 @@ CFLAGS = -Wall -g
 TARGET = trab2
 
 # Lista de arquivos fonte (.c)
-SRCS = main.c arvore_b.c
+SRCS = main.c arvore_b.c memoria_binaria.c
 
 # Lista de arquivos objeto (.o) gerados a partir dos fontes
 OBJS = $(SRCS:.c=.o)

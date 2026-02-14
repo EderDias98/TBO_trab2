@@ -3,74 +3,93 @@
 #include <stdlib.h>
 
 int main(int argc, char *argv[]) {
-    // Verifica argumentos
+    // 1. Verificação de Argumentos (Conforme Seção 6.3)
     if (argc < 3) {
         fprintf(stderr, "Uso: %s <arquivo_entrada> <arquivo_saida>\n", argv[0]);
         return 1;
     }
 
+    // 2. Abrir arquivo de entrada
     FILE *fin = fopen(argv[1], "r");
     if (!fin) {
         perror("Erro ao abrir arquivo de entrada");
         return 1;
     }
 
-    freopen(argv[2], "w", stdout);
+    // 3. Redirecionar STDOUT para o arquivo de saída (Conforme Seção 6.2)
+    // Isso garante que os printfs de "buscar" e "imprimir_arvore" vão para o arquivo.
+    if (!freopen(argv[2], "w", stdout)) {
+        perror("Erro ao abrir arquivo de saida");
+        fclose(fin);
+        return 1;
+    }
 
+    // 4. Criar Arquivo Binário Temporário (Conforme Seção 4)
+    // "O arquivo binário deve ser criado na criação do primeiro nó... e mantido..."
     char *nome_bin = "arvore.bin";
     FILE *fbin = fopen(nome_bin, "wb+");
     if (!fbin) {
         perror("Erro ao criar arquivo binario");
+        fclose(fin);
         return 1;
     }
     
+    // 5. Leitura da Ordem e Inicialização
     int ordem, n_ops;
     
-    if (fscanf(fin, "%d", &ordem) != 1) return 1;
+    // Lê a ordem (primeira linha)
+    if (fscanf(fin, "%d", &ordem) != 1) {
+        fprintf(stderr, "Erro ao ler a ordem da arvore.\n");
+        return 1;
+    }
     
-    inicializar_arvore(fbin, ordem);
+    inicializar_arquivo(fbin, ordem);
 
-    if (fscanf(fin, "%d", &n_ops) != 1) return 1;
+    // Lê o número de operações (segunda linha)
+    if (fscanf(fin, "%d", &n_ops) != 1) {
+        fprintf(stderr, "Erro ao ler numero de operacoes.\n");
+        return 1;
+    }
 
+    // 6. Loop de Processamento das Operações
     char operacao;
     int chave, dado;
     
+    // O loop deve rodar exatamente n_ops vezes
     for (int i = 0; i < n_ops; i++) {
+        // " %c" com espaço antes pula quebras de linha/espaços em branco
         if (fscanf(fin, " %c", &operacao) != 1) break;
 
         if (operacao == 'I') {
-            // Tenta ler "I Chave, Dado"
-            // Se o arquivo tiver só "I Chave", precisamos tratar.
-            // O PDF diz "I chave, registro". Vamos assumir que são dois inteiros.
-            // Tratamento robusto para vírgula opcional:
-            fscanf(fin, "%d", &chave);
-            
-            // Verifica o próximo char para ver se tem vírgula ou dado
-            char c = fgetc(fin);
-            // Pula espaços e vírgulas
-            while(c == ' ' || c == ',') c = fgetc(fin);
-            ungetc(c, fin); // Devolve o numero (ou newline) pro buffer
-            
-            if (fscanf(fin, "%d", &dado) != 1) {
-                // Se falhar em ler o dado (ex: fim de linha), usa um dummy
-                dado = chave * 10; 
+            // Formato PDF: "I chave, registro" (Ex: I 20, 20)
+            // O formato "%d , %d" lê o inteiro, consome a vírgula (se houver) e lê o próximo.
+            if (fscanf(fin, "%d , %d", &chave, &dado) == 2) {
+                inserir(fbin, chave, dado);
+            } else {
+                fprintf(stderr, "Erro de formato na insercao.\n");
             }
             
-            inserir(fbin, chave, dado);
-            
         } else if (operacao == 'R') {
+            // Formato PDF: "R chave"
             fscanf(fin, "%d", &chave);
             remover(fbin, chave);
             
         } else if (operacao == 'B') {
+            // Formato PDF: "B chave"
             fscanf(fin, "%d", &chave);
             buscar(fbin, chave);
         }
     }
 
+    // 7. Impressão Final da Árvore (Conforme Seção 5, item 4 e Seção 6.2)
+    // A árvore deve ser impressa ao final de todas as operações.
     imprimir_arvore(fbin);
 
+    // 8. Limpeza e Remoção do Binário (Conforme Seção 4)
+    // "e deve ser apagado na finalização da execução do programa."
     fclose(fin);
     fclose(fbin);
+    remove(nome_bin); // Deleta o arquivo arvore.bin do disco
+
     return 0;
 }

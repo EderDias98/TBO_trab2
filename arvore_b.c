@@ -3,169 +3,148 @@
 #include <math.h>
 
 // ============================================================================
-// 1. GERENCIAMENTO DE MEMÓRIA E CÁLCULOS
+// FUNÇÕES AUXILIARES (PRIVADAS / STATIC)
 // ============================================================================
 
-long int tamanho_no_bytes(int ordem) {
-    return sizeof(int) * 2          
-         + sizeof(long)             
-         + sizeof(int) * (ordem - 1)  // chaves
-         + sizeof(int) * (ordem - 1)  // dados (NOVO)
-         + sizeof(long) * (ordem);    
-}
-
-No* criar_no(int ordem) {
-    No *no = (No*) malloc(sizeof(No));
-    no->chaves = (int*) malloc(sizeof(int) * (ordem - 1));
-    no->dados  = (int*) malloc(sizeof(int) * (ordem - 1)); // Aloca dados
-    no->filhos = (long*) malloc(sizeof(long) * (ordem));
-    return no;
-}
-
-void liberar_no(No *no) {
-    if (no) {
-        if (no->chaves) free(no->chaves);
-        if (no->dados)  free(no->dados); // Libera dados
-        if (no->filhos) free(no->filhos);
-        free(no);
+// Insere ordenado em arrays na memória
+static void inserir_em_array(int *chaves, int *dados, long *filhos, int n, int k, int d, long filho_dir) {
+    int i = n - 1;
+    while (i >= 0 && k < chaves[i]) {
+        chaves[i+1] = chaves[i];
+        dados[i+1] = dados[i];
+        filhos[i+2] = filhos[i+1];
+        i--;
     }
+    chaves[i+1] = k;
+    dados[i+1] = d;
+    filhos[i+2] = filho_dir;
 }
 
 // ============================================================================
-// 2. DISCO (Leitura/Escrita Serializada)
+// INSERÇÃO (BOTTOM-UP)
 // ============================================================================
 
-void le_no(FILE *arq, No *no, long int pos, int ordem) {
-    if (pos == -1) return;
-    fseek(arq, pos, SEEK_SET);
+static int inserir_recursivo(FILE *arq, long pos_atual, int k, int d, Cabecalho *cab, 
+                      int *k_prom, int *d_prom, long *pos_filho_dir_prom) {
     
-    fread(&no->num_chaves, sizeof(int), 1, arq);
-    fread(&no->folha, sizeof(int), 1, arq);
-    fread(&no->posicao, sizeof(long), 1, arq);
-    
-    fread(no->chaves, sizeof(int), ordem - 1, arq);
-    fread(no->dados,  sizeof(int), ordem - 1, arq); // Lê dados
-    fread(no->filhos, sizeof(long), ordem, arq);
-}
+    No *no = criar_no(cab->ordem);
+    le_no(arq, no, pos_atual, cab->ordem);
+    int flag_overflow = 0;
 
-void escreve_no(FILE *arq, No *no, long int pos, int ordem) {
-    if (pos == -1) return;
-    fseek(arq, pos, SEEK_SET);
-    
-    fwrite(&no->num_chaves, sizeof(int), 1, arq);
-    fwrite(&no->folha, sizeof(int), 1, arq);
-    fwrite(&no->posicao, sizeof(long), 1, arq);
-    
-    fwrite(no->chaves, sizeof(int), ordem - 1, arq);
-    fwrite(no->dados,  sizeof(int), ordem - 1, arq); // Grava dados
-    fwrite(no->filhos, sizeof(long), ordem, arq);
-}
+    if (no->folha) {
+        if (no->num_chaves < cab->ordem - 1) {
+            inserir_em_array(no->chaves, no->dados, no->filhos, no->num_chaves, k, d, -1);
+            no->num_chaves++;
+            escreve_no(arq, no, pos_atual, cab->ordem);
+            flag_overflow = 0;
+        } else {
+            // Split na Folha
+            int *temp_k = malloc(sizeof(int) * cab->ordem);
+            int *temp_d = malloc(sizeof(int) * cab->ordem);
+            long *temp_f = malloc(sizeof(long) * (cab->ordem + 1));
 
-void le_cabecalho(FILE *arq, Cabecalho *cab) {
-    fseek(arq, 0, SEEK_SET);
-    fread(cab, sizeof(Cabecalho), 1, arq);
-}
+            for(int i=0; i<no->num_chaves; i++) {
+                temp_k[i] = no->chaves[i];
+                temp_d[i] = no->dados[i];
+                temp_f[i] = no->filhos[i];
+            }
+            temp_f[no->num_chaves] = no->filhos[no->num_chaves];
 
-void escreve_cabecalho(FILE *arq, Cabecalho *cab) {
-    fseek(arq, 0, SEEK_SET);
-    fwrite(cab, sizeof(Cabecalho), 1, arq);
-}
+            inserir_em_array(temp_k, temp_d, temp_f, no->num_chaves, k, d, -1);
+            
+            int idx_meio = (cab->ordem - 1) / 2;
+            *k_prom = temp_k[idx_meio];
+            *d_prom = temp_d[idx_meio];
 
-long int alocar_novo_no(FILE *arq, Cabecalho *cab) {
-    long int tam = tamanho_no_bytes(cab->ordem);
-    long int pos = sizeof(Cabecalho) + (cab->total_nos * tam);
-    cab->total_nos++;
-    escreve_cabecalho(arq, cab);
-    return pos;
-}
+            No *novo = criar_no(cab->ordem);
+            novo->folha = 1;
+            novo->posicao = alocar_novo_no(arq, cab);
+            novo->num_chaves = 0;
 
-void inicializar_arvore(FILE *arq, int ordem) {
-    Cabecalho cab;
-    cab.ordem = ordem;
-    cab.raiz_pos = -1;
-    cab.total_nos = 0;
-    escreve_cabecalho(arq, &cab);
-}
+            int j = 0;
+            for (int i = idx_meio + 1; i < cab->ordem; i++) {
+                novo->chaves[j] = temp_k[i];
+                novo->dados[j] = temp_d[i];
+                novo->filhos[j] = temp_f[i];
+                novo->num_chaves++;
+                j++;
+            }
+            novo->filhos[novo->num_chaves] = temp_f[cab->ordem]; 
 
-// ============================================================================
-// 3. INSERÇÃO
-// ============================================================================
+            no->num_chaves = idx_meio; 
+            *pos_filho_dir_prom = novo->posicao;
+            flag_overflow = 1;
 
-void split_child(FILE *arq, No *x, int i, No *y, Cabecalho *cab) {
-    No *z = criar_no(cab->ordem);
-    z->folha = y->folha;
-    z->posicao = alocar_novo_no(arq, cab);
+            escreve_no(arq, no, pos_atual, cab->ordem);
+            escreve_no(arq, novo, novo->posicao, cab->ordem);
 
-    int meio = (cab->ordem - 1) / 2;
-    z->num_chaves = y->num_chaves - meio - 1;
-
-    // Copia chaves E DADOS para Z
-    for (int j = 0; j < z->num_chaves; j++) {
-        z->chaves[j] = y->chaves[j + meio + 1];
-        z->dados[j]  = y->dados[j + meio + 1]; // Move dado
-    }
-
-    if (!y->folha) {
-        for (int j = 0; j <= z->num_chaves; j++) {
-            z->filhos[j] = y->filhos[j + meio + 1];
+            free(temp_k); free(temp_d); free(temp_f);
+            liberar_no(novo);
         }
-    }
-
-    y->num_chaves = meio;
-
-    // Abre espaço no pai X
-    for (int j = x->num_chaves; j >= i + 1; j--) {
-        x->filhos[j + 1] = x->filhos[j];
-    }
-    x->filhos[i + 1] = z->posicao;
-
-    for (int j = x->num_chaves - 1; j >= i; j--) {
-        x->chaves[j + 1] = x->chaves[j];
-        x->dados[j + 1]  = x->dados[j]; // Move dado
-    }
-    
-    // Sobe a mediana
-    x->chaves[i] = y->chaves[meio];
-    x->dados[i]  = y->dados[meio];      // Sobe dado da mediana
-    x->num_chaves++;
-
-    escreve_no(arq, y, y->posicao, cab->ordem);
-    escreve_no(arq, z, z->posicao, cab->ordem);
-    escreve_no(arq, x, x->posicao, cab->ordem);
-
-    liberar_no(z);
-}
-
-void inserir_nao_cheio(FILE *arq, No *x, int k, int d, Cabecalho *cab) {
-    int i = x->num_chaves - 1;
-
-    if (x->folha) {
-        while (i >= 0 && k < x->chaves[i]) {
-            x->chaves[i + 1] = x->chaves[i];
-            x->dados[i + 1]  = x->dados[i]; // Move dado
-            i--;
-        }
-        x->chaves[i + 1] = k;
-        x->dados[i + 1]  = d; // Insere dado
-        x->num_chaves++;
-        escreve_no(arq, x, x->posicao, cab->ordem);
     } else {
-        while (i >= 0 && k < x->chaves[i]) i--;
-        i++;
+        // Não é folha
+        int i = 0;
+        while (i < no->num_chaves && k > no->chaves[i]) i++;
         
-        No *filho = criar_no(cab->ordem);
-        le_no(arq, filho, x->filhos[i], cab->ordem);
+        int k_up, d_up;
+        long pos_up;
+        
+        int overflow_filho = inserir_recursivo(arq, no->filhos[i], k, d, cab, &k_up, &d_up, &pos_up);
 
-        if (filho->num_chaves == cab->ordem - 1) {
-            split_child(arq, x, i, filho, cab);
-            if (k > x->chaves[i]) {
-                i++;
-                le_no(arq, filho, x->filhos[i], cab->ordem);
+        if (overflow_filho) {
+            if (no->num_chaves < cab->ordem - 1) {
+                inserir_em_array(no->chaves, no->dados, no->filhos, no->num_chaves, k_up, d_up, pos_up);
+                no->num_chaves++;
+                escreve_no(arq, no, pos_atual, cab->ordem);
+                flag_overflow = 0;
+            } else {
+                // Split no Nó Interno
+                int *temp_k = malloc(sizeof(int) * cab->ordem);
+                int *temp_d = malloc(sizeof(int) * cab->ordem);
+                long *temp_f = malloc(sizeof(long) * (cab->ordem + 1));
+
+                for(int x=0; x<no->num_chaves; x++) {
+                    temp_k[x] = no->chaves[x];
+                    temp_d[x] = no->dados[x];
+                    temp_f[x] = no->filhos[x];
+                }
+                temp_f[no->num_chaves] = no->filhos[no->num_chaves];
+
+                inserir_em_array(temp_k, temp_d, temp_f, no->num_chaves, k_up, d_up, pos_up);
+
+                int idx_meio = (cab->ordem - 1) / 2;
+                *k_prom = temp_k[idx_meio];
+                *d_prom = temp_d[idx_meio];
+
+                No *novo = criar_no(cab->ordem);
+                novo->folha = 0;
+                novo->posicao = alocar_novo_no(arq, cab);
+                novo->num_chaves = 0;
+
+                int j = 0;
+                for (int x = idx_meio + 1; x < cab->ordem; x++) {
+                    novo->chaves[j] = temp_k[x];
+                    novo->dados[j] = temp_d[x];
+                    novo->filhos[j] = temp_f[x];
+                    novo->num_chaves++;
+                    j++;
+                }
+                novo->filhos[novo->num_chaves] = temp_f[cab->ordem];
+
+                no->num_chaves = idx_meio;
+                *pos_filho_dir_prom = novo->posicao;
+                flag_overflow = 1;
+
+                escreve_no(arq, no, pos_atual, cab->ordem);
+                escreve_no(arq, novo, novo->posicao, cab->ordem);
+
+                free(temp_k); free(temp_d); free(temp_f);
+                liberar_no(novo);
             }
         }
-        inserir_nao_cheio(arq, filho, k, d, cab);
-        liberar_no(filho);
     }
+    liberar_no(no);
+    return flag_overflow;
 }
 
 void inserir(FILE *arq, int chave, int dado) {
@@ -177,48 +156,45 @@ void inserir(FILE *arq, int chave, int dado) {
         raiz->folha = 1;
         raiz->num_chaves = 1;
         raiz->chaves[0] = chave;
-        raiz->dados[0]  = dado; // Insere dado na raiz
+        raiz->dados[0] = dado;
         raiz->posicao = alocar_novo_no(arq, &cab);
-        
         for(int i=0; i<cab.ordem; i++) raiz->filhos[i] = -1;
-
+        
         cab.raiz_pos = raiz->posicao;
         escreve_cabecalho(arq, &cab);
         escreve_no(arq, raiz, raiz->posicao, cab.ordem);
         liberar_no(raiz);
     } else {
-        No *raiz = criar_no(cab.ordem);
-        le_no(arq, raiz, cab.raiz_pos, cab.ordem);
-
-        if (raiz->num_chaves == cab.ordem - 1) {
+        int k_prom, d_prom;
+        long pos_filho_dir;
+        int overflow_raiz = inserir_recursivo(arq, cab.raiz_pos, chave, dado, &cab, &k_prom, &d_prom, &pos_filho_dir);
+        
+        if (overflow_raiz) {
             No *nova_raiz = criar_no(cab.ordem);
             nova_raiz->folha = 0;
-            nova_raiz->num_chaves = 0;
+            nova_raiz->num_chaves = 1;
             nova_raiz->posicao = alocar_novo_no(arq, &cab);
+            
+            nova_raiz->chaves[0] = k_prom;
+            nova_raiz->dados[0] = d_prom;
             nova_raiz->filhos[0] = cab.raiz_pos;
-            for(int i=1; i<cab.ordem; i++) nova_raiz->filhos[i] = -1;
+            nova_raiz->filhos[1] = pos_filho_dir;
+            
+            for(int i=2; i<cab.ordem; i++) nova_raiz->filhos[i] = -1;
 
             cab.raiz_pos = nova_raiz->posicao;
             escreve_cabecalho(arq, &cab);
             escreve_no(arq, nova_raiz, nova_raiz->posicao, cab.ordem);
-
-            split_child(arq, nova_raiz, 0, raiz, &cab);
-            inserir_nao_cheio(arq, nova_raiz, chave, dado, &cab);
-            
             liberar_no(nova_raiz);
-        } else {
-            inserir_nao_cheio(arq, raiz, chave, dado, &cab);
         }
-        liberar_no(raiz);
     }
 }
 
 // ============================================================================
-// 4. REMOÇÃO
+// REMOÇÃO (Helpers e Recursão)
 // ============================================================================
 
-// MODIFICADO: Agora retorna chave e dado por referência
-void pegar_antecessor(FILE *arq, long int pos_no, int ordem, int *chave_out, int *dado_out) {
+static void pegar_antecessor(FILE *arq, long int pos_no, int ordem, int *chave_out, int *dado_out) {
     No *atual = criar_no(ordem);
     le_no(arq, atual, pos_no, ordem);
     while (!atual->folha) {
@@ -226,11 +202,11 @@ void pegar_antecessor(FILE *arq, long int pos_no, int ordem, int *chave_out, int
         le_no(arq, atual, prox, ordem);
     }
     *chave_out = atual->chaves[atual->num_chaves - 1];
-    *dado_out  = atual->dados[atual->num_chaves - 1]; // Pega o dado
+    *dado_out  = atual->dados[atual->num_chaves - 1];
     liberar_no(atual);
 }
 
-void pegar_sucessor(FILE *arq, long int pos_no, int ordem, int *chave_out, int *dado_out) {
+static void pegar_sucessor(FILE *arq, long int pos_no, int ordem, int *chave_out, int *dado_out) {
     No *atual = criar_no(ordem);
     le_no(arq, atual, pos_no, ordem);
     while (!atual->folha) {
@@ -238,11 +214,11 @@ void pegar_sucessor(FILE *arq, long int pos_no, int ordem, int *chave_out, int *
         le_no(arq, atual, prox, ordem);
     }
     *chave_out = atual->chaves[0];
-    *dado_out  = atual->dados[0]; // Pega o dado
+    *dado_out  = atual->dados[0];
     liberar_no(atual);
 }
 
-void merge_nodes(FILE *arq, No *pai, int idx, Cabecalho *cab) {
+static void merge_nodes(FILE *arq, No *pai, int idx, Cabecalho *cab) {
     No *esquerda = criar_no(cab->ordem);
     No *direita = criar_no(cab->ordem);
     long int pos_esq = pai->filhos[idx];
@@ -251,17 +227,14 @@ void merge_nodes(FILE *arq, No *pai, int idx, Cabecalho *cab) {
     le_no(arq, esquerda, pos_esq, cab->ordem);
     le_no(arq, direita, pos_dir, cab->ordem);
 
-    // Desce a mediana (chave + dado)
     esquerda->chaves[esquerda->num_chaves] = pai->chaves[idx];
     esquerda->dados[esquerda->num_chaves]  = pai->dados[idx];
     esquerda->num_chaves++;
 
-    // Copia chaves e dados da direita
     for (int i = 0; i < direita->num_chaves; i++) {
         esquerda->chaves[esquerda->num_chaves + i] = direita->chaves[i];
         esquerda->dados[esquerda->num_chaves + i]  = direita->dados[i];
     }
-
     if (!esquerda->folha) {
         for (int i = 0; i <= direita->num_chaves; i++) {
             esquerda->filhos[esquerda->num_chaves + i] = direita->filhos[i];
@@ -269,7 +242,6 @@ void merge_nodes(FILE *arq, No *pai, int idx, Cabecalho *cab) {
     }
     esquerda->num_chaves += direita->num_chaves;
 
-    // Remove do pai
     for (int i = idx; i < pai->num_chaves - 1; i++) {
         pai->chaves[i] = pai->chaves[i+1];
         pai->dados[i]  = pai->dados[i+1];
@@ -284,11 +256,10 @@ void merge_nodes(FILE *arq, No *pai, int idx, Cabecalho *cab) {
     liberar_no(direita);
 }
 
-void borrow_from_prev(FILE *arq, No *pai, int idx, No *filho, int ordem) {
+static void borrow_from_prev(FILE *arq, No *pai, int idx, No *filho, int ordem) {
     No *irmao = criar_no(ordem);
     le_no(arq, irmao, pai->filhos[idx-1], ordem);
 
-    // Abre espaço no filho
     for (int i = filho->num_chaves - 1; i >= 0; i--) {
         filho->chaves[i+1] = filho->chaves[i];
         filho->dados[i+1]  = filho->dados[i];
@@ -299,13 +270,11 @@ void borrow_from_prev(FILE *arq, No *pai, int idx, No *filho, int ordem) {
         }
     }
 
-    // Pai desce para filho (chave + dado)
     filho->chaves[0] = pai->chaves[idx-1];
     filho->dados[0]  = pai->dados[idx-1];
     if (!filho->folha) filho->filhos[0] = irmao->filhos[irmao->num_chaves];
     filho->num_chaves++;
 
-    // Irmão sobe para pai (chave + dado)
     pai->chaves[idx-1] = irmao->chaves[irmao->num_chaves-1];
     pai->dados[idx-1]  = irmao->dados[irmao->num_chaves-1];
     irmao->num_chaves--;
@@ -316,21 +285,18 @@ void borrow_from_prev(FILE *arq, No *pai, int idx, No *filho, int ordem) {
     liberar_no(irmao);
 }
 
-void borrow_from_next(FILE *arq, No *pai, int idx, No *filho, int ordem) {
+static void borrow_from_next(FILE *arq, No *pai, int idx, No *filho, int ordem) {
     No *irmao = criar_no(ordem);
     le_no(arq, irmao, pai->filhos[idx+1], ordem);
 
-    // Pai desce para final do filho
     filho->chaves[filho->num_chaves] = pai->chaves[idx];
     filho->dados[filho->num_chaves]  = pai->dados[idx];
     if (!filho->folha) filho->filhos[filho->num_chaves+1] = irmao->filhos[0];
     filho->num_chaves++;
 
-    // Irmão sobe para pai
     pai->chaves[idx] = irmao->chaves[0];
     pai->dados[idx]  = irmao->dados[0];
 
-    // Ajusta irmão
     for (int i = 1; i < irmao->num_chaves; i++) {
         irmao->chaves[i-1] = irmao->chaves[i];
         irmao->dados[i-1]  = irmao->dados[i];
@@ -348,7 +314,7 @@ void borrow_from_next(FILE *arq, No *pai, int idx, No *filho, int ordem) {
     liberar_no(irmao);
 }
 
-void fill_child(FILE *arq, No *pai, int idx, int t, Cabecalho *cab) {
+static void fill_child(FILE *arq, No *pai, int idx, int t, Cabecalho *cab) {
     if (idx > 0) {
         No *esq = criar_no(cab->ordem);
         le_no(arq, esq, pai->filhos[idx-1], cab->ordem);
@@ -362,7 +328,6 @@ void fill_child(FILE *arq, No *pai, int idx, int t, Cabecalho *cab) {
         }
         liberar_no(esq);
     }
-
     if (idx < pai->num_chaves) {
         No *dir = criar_no(cab->ordem);
         le_no(arq, dir, pai->filhos[idx+1], cab->ordem);
@@ -376,15 +341,11 @@ void fill_child(FILE *arq, No *pai, int idx, int t, Cabecalho *cab) {
         }
         liberar_no(dir);
     }
-
-    if (idx < pai->num_chaves) {
-        merge_nodes(arq, pai, idx, cab);
-    } else {
-        merge_nodes(arq, pai, idx-1, cab);
-    }
+    if (idx < pai->num_chaves) merge_nodes(arq, pai, idx, cab);
+    else merge_nodes(arq, pai, idx-1, cab);
 }
 
-void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
+static void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
     int idx = 0;
     while (idx < no->num_chaves && no->chaves[idx] < k) idx++;
 
@@ -392,7 +353,7 @@ void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
         if (no->folha) {
             for (int i = idx; i < no->num_chaves - 1; i++) {
                 no->chaves[i] = no->chaves[i+1];
-                no->dados[i]  = no->dados[i+1]; // Shift dados
+                no->dados[i]  = no->dados[i+1];
             }
             no->num_chaves--;
             escreve_no(arq, no, no->posicao, cab->ordem);
@@ -406,14 +367,14 @@ void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
                 int pred_k, pred_d;
                 pegar_antecessor(arq, no->filhos[idx], cab->ordem, &pred_k, &pred_d);
                 no->chaves[idx] = pred_k;
-                no->dados[idx]  = pred_d; // Substitui pelo dado do antecessor
+                no->dados[idx]  = pred_d;
                 escreve_no(arq, no, no->posicao, cab->ordem);
                 remover_rec(arq, filho_esq, pred_k, t, cab);
             } else if (filho_dir->num_chaves >= t) {
                 int suc_k, suc_d;
                 pegar_sucessor(arq, no->filhos[idx+1], cab->ordem, &suc_k, &suc_d);
                 no->chaves[idx] = suc_k;
-                no->dados[idx]  = suc_d; // Substitui pelo dado do sucessor
+                no->dados[idx]  = suc_d;
                 escreve_no(arq, no, no->posicao, cab->ordem);
                 remover_rec(arq, filho_dir, suc_k, t, cab);
             } else {
@@ -437,7 +398,6 @@ void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
             if (idx > no->num_chaves) idx--; 
             le_no(arq, filho, no->filhos[idx], cab->ordem);
         }
-        
         remover_rec(arq, filho, k, t, cab);
         liberar_no(filho);
     }
@@ -450,7 +410,6 @@ void remover(FILE *arq, int chave) {
 
     No *raiz = criar_no(cab.ordem);
     le_no(arq, raiz, cab.raiz_pos, cab.ordem);
-    
     int t = (int)ceil(cab.ordem / 2.0);
 
     remover_rec(arq, raiz, chave, t, &cab);
@@ -467,23 +426,21 @@ void remover(FILE *arq, int chave) {
 }
 
 // ============================================================================
-// 5. BUSCA E IMPRESSÃO
+// BUSCA E IMPRESSÃO
 // ============================================================================
 
-void buscar_rec(FILE *arq, No *no, int k, int ordem) {
+static void buscar_rec(FILE *arq, No *no, int k, int ordem) {
     int i = 0;
     while (i < no->num_chaves && k > no->chaves[i]) i++;
 
     if (i < no->num_chaves && k == no->chaves[i]) {
-        printf("O REGISTRO ESTA NA ARVORE! (Dado: %d)\n", no->dados[i]);
+        printf("O REGISTRO ESTA NA ARVORE!\n");
         return;
     }
-
     if (no->folha) {
         printf("O REGISTRO NAO ESTA NA ARVORE!\n");
         return;
     }
-
     No *filho = criar_no(ordem);
     le_no(arq, filho, no->filhos[i], ordem);
     buscar_rec(arq, filho, k, ordem);
@@ -532,8 +489,7 @@ void imprimir_arvore(FILE *arq) {
 
         printf("[");
         for (int i = 0; i < no->num_chaves; i++) {
-            // Imprime chave e dado
-            printf("k:%d(d:%d), ", no->chaves[i], no->dados[i]);
+            printf("key: %d, ", no->chaves[i]);
         }
         printf("] ");
 
