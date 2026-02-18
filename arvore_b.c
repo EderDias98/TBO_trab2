@@ -31,6 +31,14 @@ static int inserir_recursivo(FILE *arq, long pos_atual, int k, int d, Cabecalho 
     le_no(arq, no, pos_atual, cab->ordem);
     int flag_overflow = 0;
 
+    // Checa chaves duplicadas, se encontrar ignora inserção
+    for (int i = 0; i < no->num_chaves; i++) {
+        if (no->chaves[i] == k) {
+            liberar_no(no);
+            return 0;
+        }
+    }
+
     if (no->folha) {
         if (no->num_chaves < cab->ordem - 1) {
             inserir_em_array(no->chaves, no->dados, no->filhos, no->num_chaves, k, d, -1);
@@ -39,9 +47,9 @@ static int inserir_recursivo(FILE *arq, long pos_atual, int k, int d, Cabecalho 
             flag_overflow = 0;
         } else {
             // Split na Folha
-            int *temp_k = malloc(sizeof(int) * cab->ordem);
-            int *temp_d = malloc(sizeof(int) * cab->ordem);
-            long *temp_f = malloc(sizeof(long) * (cab->ordem + 1));
+            int *temp_k = malloc(sizeof(int) * (cab->ordem + 1));
+            int *temp_d = malloc(sizeof(int) * (cab->ordem + 1));
+            long *temp_f = malloc(sizeof(long) * (cab->ordem + 2));
 
             for(int i=0; i<no->num_chaves; i++) {
                 temp_k[i] = no->chaves[i];
@@ -71,7 +79,14 @@ static int inserir_recursivo(FILE *arq, long pos_atual, int k, int d, Cabecalho 
             }
             novo->filhos[novo->num_chaves] = temp_f[cab->ordem]; 
 
-            no->num_chaves = idx_meio; 
+            for (int i = 0; i < idx_meio; i++) {
+                no->chaves[i] = temp_k[i];
+                no->dados[i] = temp_d[i];
+                no->filhos[i] = temp_f[i];
+            }
+            no->filhos[idx_meio] = temp_f[idx_meio];
+            no->num_chaves = idx_meio;
+            
             *pos_filho_dir_prom = novo->posicao;
             flag_overflow = 1;
 
@@ -99,9 +114,9 @@ static int inserir_recursivo(FILE *arq, long pos_atual, int k, int d, Cabecalho 
                 flag_overflow = 0;
             } else {
                 // Split no Nó Interno
-                int *temp_k = malloc(sizeof(int) * cab->ordem);
-                int *temp_d = malloc(sizeof(int) * cab->ordem);
-                long *temp_f = malloc(sizeof(long) * (cab->ordem + 1));
+                int *temp_k = malloc(sizeof(int) * (cab->ordem + 1));
+                int *temp_d = malloc(sizeof(int) * (cab->ordem + 1));
+                long *temp_f = malloc(sizeof(long) * (cab->ordem + 2));
 
                 for(int x=0; x<no->num_chaves; x++) {
                     temp_k[x] = no->chaves[x];
@@ -131,7 +146,14 @@ static int inserir_recursivo(FILE *arq, long pos_atual, int k, int d, Cabecalho 
                 }
                 novo->filhos[novo->num_chaves] = temp_f[cab->ordem];
 
+                for (int x = 0; x < idx_meio; x++) {
+                    no->chaves[x] = temp_k[x];
+                    no->dados[x] = temp_d[x];
+                    no->filhos[x] = temp_f[x];
+                }
+                no->filhos[idx_meio] = temp_f[idx_meio];
                 no->num_chaves = idx_meio;
+                
                 *pos_filho_dir_prom = novo->posicao;
                 flag_overflow = 1;
 
@@ -227,20 +249,50 @@ static void merge_nodes(FILE *arq, No *pai, int idx, Cabecalho *cab) {
     le_no(arq, esquerda, pos_esq, cab->ordem);
     le_no(arq, direita, pos_dir, cab->ordem);
 
-    esquerda->chaves[esquerda->num_chaves] = pai->chaves[idx];
-    esquerda->dados[esquerda->num_chaves]  = pai->dados[idx];
-    esquerda->num_chaves++;
-
-    for (int i = 0; i < direita->num_chaves; i++) {
-        esquerda->chaves[esquerda->num_chaves + i] = direita->chaves[i];
-        esquerda->dados[esquerda->num_chaves + i]  = direita->dados[i];
+    int max_chaves = 2 * cab->ordem - 1;
+    int *temp_chaves = malloc(sizeof(int) * max_chaves);
+    int *temp_dados = malloc(sizeof(int) * max_chaves);
+    long *temp_filhos = malloc(sizeof(long) * (max_chaves + 1));
+    
+    int n = 0;
+    for (int i = 0; i < esquerda->num_chaves; i++) {
+        temp_chaves[n] = esquerda->chaves[i];
+        temp_dados[n] = esquerda->dados[i];
+        n++;
     }
+    temp_chaves[n] = pai->chaves[idx];
+    temp_dados[n] = pai->dados[idx];
+    n++;
+    for (int i = 0; i < direita->num_chaves; i++) {
+        temp_chaves[n] = direita->chaves[i];
+        temp_dados[n] = direita->dados[i];
+        n++;
+    }
+    
+    int nf = 0;
     if (!esquerda->folha) {
+        for (int i = 0; i <= esquerda->num_chaves; i++) {
+            temp_filhos[nf++] = esquerda->filhos[i];
+        }
         for (int i = 0; i <= direita->num_chaves; i++) {
-            esquerda->filhos[esquerda->num_chaves + i] = direita->filhos[i];
+            temp_filhos[nf++] = direita->filhos[i];
         }
     }
-    esquerda->num_chaves += direita->num_chaves;
+    
+    esquerda->num_chaves = n;
+    for (int i = 0; i < n; i++) {
+        esquerda->chaves[i] = temp_chaves[i];
+        esquerda->dados[i] = temp_dados[i];
+    }
+    if (!esquerda->folha) {
+        for (int i = 0; i < nf; i++) {
+            esquerda->filhos[i] = temp_filhos[i];
+        }
+    }
+    
+    free(temp_chaves);
+    free(temp_dados);
+    free(temp_filhos);
 
     for (int i = idx; i < pai->num_chaves - 1; i++) {
         pai->chaves[i] = pai->chaves[i+1];
@@ -341,6 +393,7 @@ static void fill_child(FILE *arq, No *pai, int idx, int t, Cabecalho *cab) {
         }
         liberar_no(dir);
     }
+    // Merge - prefer right sibling
     if (idx < pai->num_chaves) merge_nodes(arq, pai, idx, cab);
     else merge_nodes(arq, pai, idx-1, cab);
 }
@@ -370,6 +423,12 @@ static void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
                 no->dados[idx]  = pred_d;
                 escreve_no(arq, no, no->posicao, cab->ordem);
                 remover_rec(arq, filho_esq, pred_k, t, cab);
+                
+                le_no(arq, filho_esq, no->filhos[idx], cab->ordem);
+                int min_keys = (int)ceil(cab->ordem / 2.0) - 1;
+                if (filho_esq->num_chaves < min_keys) {
+                    fill_child(arq, no, idx, t, cab);
+                }
             } else if (filho_dir->num_chaves >= t) {
                 int suc_k, suc_d;
                 pegar_sucessor(arq, no->filhos[idx+1], cab->ordem, &suc_k, &suc_d);
@@ -377,12 +436,26 @@ static void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
                 no->dados[idx]  = suc_d;
                 escreve_no(arq, no, no->posicao, cab->ordem);
                 remover_rec(arq, filho_dir, suc_k, t, cab);
+                
+                le_no(arq, filho_dir, no->filhos[idx+1], cab->ordem);
+                int min_keys = (int)ceil(cab->ordem / 2.0) - 1;
+                if (filho_dir->num_chaves < min_keys) {
+                    fill_child(arq, no, idx+1, t, cab);
+                }
             } else {
-                merge_nodes(arq, no, idx, cab);
-                No *filho_merged = criar_no(cab->ordem);
-                le_no(arq, filho_merged, no->filhos[idx], cab->ordem);
-                remover_rec(arq, filho_merged, k, t, cab);
-                liberar_no(filho_merged);
+                int pred_k, pred_d;
+                pegar_antecessor(arq, no->filhos[idx], cab->ordem, &pred_k, &pred_d);
+                no->chaves[idx] = pred_k;
+                no->dados[idx] = pred_d;
+                escreve_no(arq, no, no->posicao, cab->ordem);
+                remover_rec(arq, filho_esq, pred_k, t, cab);
+                
+                le_no(arq, no, no->posicao, cab->ordem);
+                le_no(arq, filho_esq, no->filhos[idx], cab->ordem);
+                int min_keys = (int)ceil(cab->ordem / 2.0) - 1;
+                if (filho_esq->num_chaves < min_keys) {
+                    fill_child(arq, no, idx, t, cab);
+                }
             }
             liberar_no(filho_esq);
             liberar_no(filho_dir);
@@ -393,12 +466,24 @@ static void remover_rec(FILE *arq, No *no, int k, int t, Cabecalho *cab) {
         No *filho = criar_no(cab->ordem);
         le_no(arq, filho, no->filhos[idx], cab->ordem);
         
-        if (filho->num_chaves < t) {
-            fill_child(arq, no, idx, t, cab);
-            if (idx > no->num_chaves) idx--; 
-            le_no(arq, filho, no->filhos[idx], cab->ordem);
-        }
         remover_rec(arq, filho, k, t, cab);
+        
+        le_no(arq, no, no->posicao, cab->ordem);
+        
+        if (idx > no->num_chaves) idx = no->num_chaves;
+        if (no->filhos[idx] == -1) {
+            liberar_no(filho);
+            return;
+        }
+        
+        le_no(arq, filho, no->filhos[idx], cab->ordem);
+        
+        int min_keys = (int)ceil(cab->ordem / 2.0) - 1;
+        
+        if (filho->num_chaves < min_keys) {
+            fill_child(arq, no, idx, t, cab);
+        }
+        
         liberar_no(filho);
     }
 }
@@ -470,6 +555,7 @@ void imprimir_arvore(FILE *arq) {
     
     int nos_no_nivel_atual = 1;
     int nos_no_prox_nivel = 0;
+    int primeiro_no_nivel = 1;
 
     fila[fim++] = cab.raiz_pos;
 
@@ -480,6 +566,7 @@ void imprimir_arvore(FILE *arq) {
             printf("\n");
             nos_no_nivel_atual = nos_no_prox_nivel;
             nos_no_prox_nivel = 0;
+            primeiro_no_nivel = 1;
         }
 
         long int pos = fila[inicio++];
@@ -487,11 +574,16 @@ void imprimir_arvore(FILE *arq) {
         le_no(arq, no, pos, cab.ordem);
         nos_no_nivel_atual--;
 
+        if (!primeiro_no_nivel) {
+            printf("  ");
+        }
+        primeiro_no_nivel = 0;
+
         printf("[");
         for (int i = 0; i < no->num_chaves; i++) {
             printf("key: %d, ", no->chaves[i]);
         }
-        printf("] ");
+        printf("]");
 
         if (!no->folha) {
             for (int i = 0; i <= no->num_chaves; i++) {

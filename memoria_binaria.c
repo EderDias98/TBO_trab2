@@ -1,4 +1,5 @@
 #include "memoria_binaria.h"
+#include <string.h>
 
 // Calcula tamanho fixo do nó no disco para usar no fseek
 long int tamanho_no_bytes(int ordem) {
@@ -11,9 +12,18 @@ long int tamanho_no_bytes(int ordem) {
 
 No* criar_no(int ordem) {
     No *no = (No*) malloc(sizeof(No));
-    no->chaves = (int*) malloc(sizeof(int) * (ordem - 1));
-    no->dados  = (int*) malloc(sizeof(int) * (ordem - 1));
-    no->filhos = (long*) malloc(sizeof(long) * (ordem));
+    // Alloca espaco extra para operacao de merge
+    int max_keys_for_merge = 2 * ordem - 1;
+    no->chaves = (int*) calloc(max_keys_for_merge, sizeof(int));
+    no->dados  = (int*) calloc(max_keys_for_merge, sizeof(int));
+    no->filhos = (long*) malloc(sizeof(long) * (max_keys_for_merge + 1));
+    // Inicializa todos filhos com -1
+    for (int i = 0; i <= max_keys_for_merge; i++) {
+        no->filhos[i] = -1;
+    }
+    no->num_chaves = 0;
+    no->folha = 1;
+    no->posicao = -1;
     return no;
 }
 
@@ -69,6 +79,7 @@ long int alocar_novo_no(FILE *arq, Cabecalho *cab) {
 
 void inicializar_arquivo(FILE *arq, int ordem) {
     Cabecalho cab;
+    memset(&cab, 0, sizeof(Cabecalho));  // Inicializa os bytes para evitar erro de valgrind
     cab.ordem = ordem;
     cab.raiz_pos = -1;
     cab.total_nos = 0;
